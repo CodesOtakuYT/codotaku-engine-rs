@@ -1,0 +1,11 @@
+[package]
+name = "codotaku-engine-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.99"
+ash = "0.38.0"
+ash-window = "0.13.0"
+glam = "0.30.5"
+winit = { version = "0.30.12", features = ["rwh_06"] }
