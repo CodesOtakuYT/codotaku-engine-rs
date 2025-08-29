@@ -1,3 +1,4 @@
+use crate::core::driver::Driver;
 use crate::core::gpu::Gpu;
 use crate::core::renderer::{RenderParams, Renderer};
 use crate::core::swapchain_target::SwapchainTarget;
@@ -10,11 +11,18 @@ pub struct Windows {
     children: HashMap<WindowId, Vec<WindowId>>,
     swapchain_targets: HashMap<WindowId, SwapchainTarget>,
     windows: HashMap<WindowId, Arc<Window>>,
-    gpu: Arc<Gpu>,
+    pub gpu: Arc<Gpu>,
 }
 
 impl Windows {
-    pub fn new(gpu: Arc<Gpu>) -> anyhow::Result<Self> {
+    pub fn new(event_loop: &ActiveEventLoop) -> anyhow::Result<Self> {
+        let driver = Arc::new(Driver::new(event_loop)?);
+        let (physical_device, queue_family_index) = driver.request_device(event_loop).unwrap();
+        let gpu = Arc::new(Gpu::new(driver, physical_device, queue_family_index)?);
+        Self::from_gpu(gpu)
+    }
+
+    pub fn from_gpu(gpu: Arc<Gpu>) -> anyhow::Result<Self> {
         let windows = HashMap::new();
         let swapchain_targets = HashMap::new();
         let children = HashMap::new();
