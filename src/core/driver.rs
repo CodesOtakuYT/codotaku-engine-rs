@@ -1,119 +1,101 @@
-use ash::vk;
-use ash_window::{create_surface, enumerate_required_extensions};
+use std::any::Any;
+use std::sync::Arc;
+use vulkano::device::physical::{PhysicalDevice, PhysicalDeviceType};
+use vulkano::device::{
+    Device, DeviceCreateInfo, DeviceExtensions, DeviceFeatures, Queue, QueueCreateInfo, QueueFlags,
+};
+use vulkano::instance::{Instance, InstanceCreateFlags, InstanceCreateInfo};
+use vulkano::swapchain::{FromWindowError, Surface};
+use vulkano::{Validated, Version, VulkanError, VulkanLibrary};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
-pub(crate) struct Driver {
-    entry: ash::Entry,
-    instance: ash::Instance,
-    surface_extension: ash::khr::surface::Instance,
+pub struct Driver {
+    pub(crate) instance: Arc<Instance>,
 }
 
 impl Driver {
-    pub(crate) fn new(display: impl HasDisplayHandle) -> anyhow::Result<Self> {
-        unsafe {
-            let entry = ash::Entry::load()?;
-            let required_extensions =
-                enumerate_required_extensions(display.display_handle()?.as_raw())?;
-            let instance = entry.create_instance(
-                &vk::InstanceCreateInfo::default()
-                    .enabled_extension_names(required_extensions)
-                    .application_info(
-                        &vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_3),
-                    ),
-                None,
-            )?;
-            let surface_extension = ash::khr::surface::Instance::new(&entry, &instance);
-            Ok(Self {
-                entry,
-                instance,
-                surface_extension,
-            })
-        }
+    pub fn new(display: impl HasDisplayHandle) -> anyhow::Result<Self> {
+        let instance = Instance::new(
+            VulkanLibrary::new()?,
+            InstanceCreateInfo {
+                flags: InstanceCreateFlags::ENUMERATE_PORTABILITY,
+                enabled_extensions: Surface::required_extensions(&display)?,
+                ..Default::default()
+            },
+        )?;
+        Ok(Self { instance })
     }
 
-    pub(crate) fn enumerate_physical_devices(
-        self: &Self,
-    ) -> anyhow::Result<Vec<vk::PhysicalDevice>> {
-        unsafe { Ok(self.instance.enumerate_physical_devices()?) }
-    }
-
-    pub(crate) fn load_swapchain_extension(
-        self: &Self,
-        device: &ash::Device,
-    ) -> ash::khr::swapchain::Device {
-        ash::khr::swapchain::Device::new(&self.instance, device)
-    }
-
-    pub(crate) fn load_push_descriptor_extension(
-        self: &Self,
-        device: &ash::Device,
-    ) -> ash::khr::push_descriptor::Device {
-        ash::khr::push_descriptor::Device::new(&self.instance, device)
+    pub fn enumerate_physical_devices(
+        &self,
+    ) -> Result<impl ExactSizeIterator<Item = Arc<PhysicalDevice>>, VulkanError> {
+        self.instance.enumerate_physical_devices()
     }
 
     pub(crate) fn create_surface(
         &self,
-        display_handle: impl HasDisplayHandle + HasWindowHandle,
-    ) -> anyhow::Result<vk::SurfaceKHR> {
-        unsafe {
-            Ok(create_surface(
-                &self.entry,
-                &self.instance,
-                display_handle.display_handle().unwrap().as_raw(),
-                display_handle.window_handle()?.as_raw(),
-                None,
-            )?)
-        }
+        window: Arc<impl HasWindowHandle + HasDisplayHandle + Any + Send + Sync>,
+    ) -> Result<Arc<Surface>, FromWindowError> {
+        Surface::from_window(self.instance.clone(), window)
     }
 
     pub(crate) fn create_device(
-        self: &Self,
-        physical_device: vk::PhysicalDevice,
-    ) -> anyhow::Result<ash::Device> {
-        unsafe {
-            Ok(self.instance.create_device(
-                physical_device,
-                &vk::DeviceCreateInfo::default()
-                    .enabled_extension_names(&[
-                        ash::khr::swapchain::NAME.as_ptr(),
-                        ash::khr::push_descriptor::NAME.as_ptr(),
-                    ])
-                    .queue_create_infos(&[
-                        vk::DeviceQueueCreateInfo::default().queue_priorities(&[1.0_f32])
-                    ])
-                    .push_next(
-                        &mut vk::PhysicalDeviceVulkan12Features::default()
-                            .buffer_device_address(true)
-                            .scalar_block_layout(true)
-                            .timeline_semaphore(true),
-                    )
-                    .push_next(
-                        &mut vk::PhysicalDeviceVulkan13Features::default()
-                            .synchronization2(true)
-                            .dynamic_rendering(true),
-                    ),
-                None,
-            )?)
-        }
-    }
-
-    pub(crate) fn get_surface_capabilities(
         &self,
-        physical_device: vk::PhysicalDevice,
-        surface: vk::SurfaceKHR,
-    ) -> anyhow::Result<vk::SurfaceCapabilitiesKHR> {
-        unsafe {
-            Ok(self
-                .surface_extension
-                .get_physical_device_surface_capabilities(physical_device, surface)?)
-        }
+        physical_device: Arc<PhysicalDevice>,
+        queue_family_index: u32,
+    ) -> Result<(Arc<Device>, impl ExactSizeIterator<Item = Arc<Queue>>), Validated<VulkanError>>
+    {
+        Device::new(
+            physical_device,
+            DeviceCreateInfo {
+                queue_create_infos: vec![QueueCreateInfo {
+                    queue_family_index,
+                    ..Default::default()
+                }],
+                enabled_extensions: DeviceExtensions {
+                    khr_swapchain: true,
+                    ..DeviceExtensions::empty()
+                },
+                enabled_features: DeviceFeatures {
+                    dynamic_rendering: true,
+                    ..DeviceFeatures::empty()
+                },
+                ..Default::default()
+            },
+        )
     }
-}
 
-impl Drop for Driver {
-    fn drop(&mut self) {
-        unsafe {
-            self.instance.destroy_instance(None);
-        }
+    pub fn request_device(
+        &self,
+        display: &impl HasDisplayHandle,
+    ) -> Option<(Arc<PhysicalDevice>, u32)> {
+        let device_extensions = DeviceExtensions {
+            khr_swapchain: true,
+            ..DeviceExtensions::empty()
+        };
+        self.enumerate_physical_devices()
+            .ok()?
+            .filter(|p| {
+                p.api_version() >= Version::V1_3 || p.supported_extensions().khr_dynamic_rendering
+            })
+            .filter(|p| p.supported_extensions().contains(&device_extensions))
+            .filter_map(|p| {
+                p.queue_family_properties()
+                    .iter()
+                    .enumerate()
+                    .position(|(i, q)| {
+                        q.queue_flags.intersects(QueueFlags::GRAPHICS)
+                            && p.presentation_support(i as u32, display).unwrap()
+                    })
+                    .map(|i| (p, i as u32))
+            })
+            .min_by_key(|(p, _)| match p.properties().device_type {
+                PhysicalDeviceType::DiscreteGpu => 0,
+                PhysicalDeviceType::IntegratedGpu => 1,
+                PhysicalDeviceType::VirtualGpu => 2,
+                PhysicalDeviceType::Cpu => 3,
+                PhysicalDeviceType::Other => 4,
+                _ => 5,
+            })
     }
 }
