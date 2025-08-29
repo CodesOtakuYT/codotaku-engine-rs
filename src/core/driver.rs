@@ -58,6 +58,7 @@ impl Driver {
                 },
                 enabled_features: DeviceFeatures {
                     dynamic_rendering: true,
+                    fill_mode_non_solid: true,
                     ..DeviceFeatures::empty()
                 },
                 ..Default::default()

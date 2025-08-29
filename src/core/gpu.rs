@@ -1,6 +1,9 @@
 use crate::core::driver::Driver;
 use std::any::Any;
 use std::sync::Arc;
+use vulkano::buffer::{
+    AllocateBufferError, Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer,
+};
 use vulkano::command_buffer::allocator::StandardCommandBufferAllocator;
 use vulkano::command_buffer::{
     AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer,
@@ -8,7 +11,7 @@ use vulkano::command_buffer::{
 use vulkano::device::physical::PhysicalDevice;
 use vulkano::device::Queue;
 use vulkano::image::{Image, ImageUsage};
-use vulkano::memory::allocator::StandardMemoryAllocator;
+use vulkano::memory::allocator::{AllocationCreateInfo, MemoryTypeFilter, StandardMemoryAllocator};
 use vulkano::swapchain::{FromWindowError, Surface, SurfaceInfo, Swapchain, SwapchainCreateInfo};
 use vulkano::sync::GpuFuture;
 use vulkano::{sync, Validated, VulkanError};
@@ -17,7 +20,7 @@ use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 pub struct Gpu {
     command_buffer_allocator: Arc<StandardCommandBufferAllocator>,
     memory_allocator: Arc<StandardMemoryAllocator>,
-    pub(crate) queue: Arc<Queue>,
+    pub queue: Arc<Queue>,
     driver: Arc<Driver>,
 }
 
@@ -99,6 +102,31 @@ impl Gpu {
             self.command_buffer_allocator.clone(),
             self.queue.queue_family_index(),
             CommandBufferUsage::OneTimeSubmit,
+        )
+    }
+
+    pub(crate) fn create_buffer<T, I>(
+        &self,
+        data: I,
+        usage: BufferUsage,
+    ) -> Result<Subbuffer<[T]>, Validated<AllocateBufferError>>
+    where
+        T: BufferContents,
+        I: IntoIterator<Item = T>,
+        I::IntoIter: ExactSizeIterator,
+    {
+        Buffer::from_iter(
+            self.memory_allocator.clone(),
+            BufferCreateInfo {
+                usage,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE
+                    | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            },
+            data,
         )
     }
 }

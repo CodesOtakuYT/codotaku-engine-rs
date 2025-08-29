@@ -82,16 +82,16 @@ impl Windows {
         true
     }
 
-    pub fn redraw(
+    pub fn redraw<Vertex>(
         &mut self,
         id: WindowId,
         renderer: &Renderer,
-        render_params: RenderParams,
+        render_params: RenderParams<Vertex>,
     ) -> anyhow::Result<()> {
         let swapchain_target = self.swapchain_targets.get_mut(&id).unwrap();
         let window = self.windows.get(&id).unwrap();
         if let Some(acquired) = swapchain_target.try_acquire_image(window.inner_size().into())? {
-            let command_buffer = renderer.render(acquired.image.clone(), render_params)?;
+            let command_buffer = renderer.render(acquired.image_view.clone(), render_params)?;
             swapchain_target.present(acquired, command_buffer)?;
         }
         Ok(())
@@ -123,5 +123,9 @@ impl Windows {
 
     pub fn suspend(&mut self) {
         self.swapchain_targets.clear();
+    }
+
+    pub fn image_format(&self, id: WindowId) -> Option<vulkano::format::Format> {
+        self.swapchain_targets.get(&id).map(|s| s.image_format())
     }
 }

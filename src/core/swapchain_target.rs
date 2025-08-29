@@ -4,6 +4,8 @@ use std::any::Any;
 use std::sync::Arc;
 use vulkano::command_buffer::PrimaryCommandBufferAbstract;
 use vulkano::device::DeviceOwned;
+use vulkano::format::Format;
+use vulkano::image::view::ImageView;
 use vulkano::image::{Image, ImageUsage};
 use vulkano::swapchain::{
     acquire_next_image, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo,
@@ -15,6 +17,7 @@ use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 pub struct Acquired {
     pub(crate) image: Arc<Image>,
+    pub(crate) image_view: Arc<ImageView>,
     image_index: u32,
     acquire_future: SwapchainAcquireFuture,
 }
@@ -23,6 +26,7 @@ pub(crate) struct SwapchainTarget {
     recreate_swapchain: bool,
     previous_frame_end: Option<Box<dyn GpuFuture>>,
     swapchain_images: Vec<Arc<Image>>,
+    swapchain_image_views: Vec<Arc<ImageView>>,
     swapchain: Arc<Swapchain>,
     gpu: Arc<Gpu>,
 }
@@ -35,7 +39,11 @@ impl SwapchainTarget {
     ) -> anyhow::Result<Self> {
         let surface = gpu.create_surface(window)?;
         let (swapchain, swapchain_images) =
-            gpu.create_swapchain(surface, extent, ImageUsage::TRANSFER_DST)?;
+            gpu.create_swapchain(surface, extent, ImageUsage::COLOR_ATTACHMENT)?;
+        let swapchain_image_views = swapchain_images
+            .iter()
+            .map(|image| ImageView::new_default(image.clone()).unwrap())
+            .collect();
         let previous_frame_end = Some(gpu.now());
         Ok(Self {
             recreate_swapchain: false,
@@ -43,6 +51,7 @@ impl SwapchainTarget {
             swapchain,
             swapchain_images,
             previous_frame_end,
+            swapchain_image_views,
         })
     }
 
@@ -64,6 +73,11 @@ impl SwapchainTarget {
 
             self.swapchain = new_swapchain;
             self.swapchain_images = new_images;
+            self.swapchain_image_views = self
+                .swapchain_images
+                .iter()
+                .map(|image| ImageView::new_default(image.clone()).unwrap())
+                .collect();
             self.recreate_swapchain = false;
         }
 
@@ -83,6 +97,7 @@ impl SwapchainTarget {
 
         Ok(Some(Acquired {
             image: self.swapchain_images[image_index as usize].clone(),
+            image_view: self.swapchain_image_views[image_index as usize].clone(),
             image_index,
             acquire_future,
         }))
@@ -124,6 +139,10 @@ impl SwapchainTarget {
                 Err(anyhow!(e))
             }
         }
+    }
+
+    pub(crate) fn image_format(&self) -> Format {
+        self.swapchain.image_format()
     }
 
     pub(crate) fn resize(&mut self) {
